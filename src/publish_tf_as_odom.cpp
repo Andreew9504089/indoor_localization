@@ -25,14 +25,13 @@ float opti_i, opti_j, opti_k, opti_w;
 geometry_msgs::Pose last_uav_pose_world;
 bool use_optiTrack = true; // use optiTrack's orientation
 double epsilon = 0.3; // distance jump threshold
+int max_bundle_num = 2; // maximum number of bundle to consider
+double stall_time = 0.5;
 
 ros::NodeHandle nh;
 ros::Publisher odom_pub;
 ros::Subscriber opti_sub;
 ros::Rate rate(100);
-
-
-
 
 int main(int argc, char **argv) {
   ros::init(argc, argv, "tf_to_odom");
@@ -80,11 +79,11 @@ int main(int argc, char **argv) {
         last_uav_pose_world = uav_pose_world;
       }else{
         // stall the UAV to capture better detection
-        stallUAV(0.5);
+        stallUAV(stall_time);
       }
     }else{
       // stall the UAV to capture better detection
-      stallUAV(0.5);
+      stallUAV(stall_time);
     }
 
     ros::spinOnce();
@@ -124,7 +123,6 @@ void bundleSelection(std::vector<geometry_msgs::TransformStamped> transforms_fou
     }
   }
 
-  int max_bundle_num = 2; // maximum number of bundle to consider
   for(int k, cnt; (k < sorted_bundle.size()) || (cnt <= max_bundle_num); k++){
     // check if the z is jumping to negative, if so, then ignore it and find the next smallest
     if(transforms_found[sorted_bundle[k]].transform.translation.z >= 0){
@@ -143,18 +141,21 @@ void bundleFusion(std::vector<geometry_msgs::TransformStamped> transforms_select
 
   if(transforms_selected.size()>0){
     for(int i=0; i < transforms_selected.size(); i++){
-      geometry_msgs::Pose camera_pose_wrt_bundle, robot_pose_wrt_bundle, robot_pose_wrt_map;
+      geometry_msgs::Pose bundle_pose_wrt_camera, robot_pose_wrt_camera, robot_pose_wrt_bundle, robot_pose_wrt_map;
 
-      camera_pose_wrt_bundle.position.x = transforms_selected[i].transform.translation.x;
-      camera_pose_wrt_bundle.position.y = transforms_selected[i].transform.translation.y;
-      camera_pose_wrt_bundle.position.z = transforms_selected[i].transform.translation.z;
-      camera_pose_wrt_bundle.orientation.x = transforms_selected[i].transform.rotation.x;
-      camera_pose_wrt_bundle.orientation.y = transforms_selected[i].transform.rotation.y;
-      camera_pose_wrt_bundle.orientation.z = transforms_selected[i].transform.rotation.z;
-      camera_pose_wrt_bundle.orientation.w = transforms_selected[i].transform.rotation.w;
+      bundle_pose_wrt_camera.position.x = transforms_selected[i].transform.translation.x;
+      bundle_pose_wrt_camera.position.y = transforms_selected[i].transform.translation.y;
+      bundle_pose_wrt_camera.position.z = transforms_selected[i].transform.translation.z;
+      bundle_pose_wrt_camera.orientation.x = transforms_selected[i].transform.rotation.x;
+      bundle_pose_wrt_camera.orientation.y = transforms_selected[i].transform.rotation.y;
+      bundle_pose_wrt_camera.orientation.z = transforms_selected[i].transform.rotation.z;
+      bundle_pose_wrt_camera.orientation.w = transforms_selected[i].transform.rotation.w;
 
       // transform from camera_link to base_link
-      robot_pose_wrt_bundle = poseTransform(camera_pose_wrt_bundle, "camera_link", "base_link");
+      robot_pose_wrt_camera = poseTransform(camera_pose_wrt_bundle, "camera_link", "base_link");
+
+      // transform from base link frame to bundle frame
+      robot_pose_wrt_bundle = poseTransform(camera_pose_wrt_bundle, "base_link", transforms_selected[i].child_frame_id);
 
       // transform the pose from bundle frame to map frame
       robot_pose_wrt_map = poseTransform(robot_pose_wrt_bundle, transforms_selected[i].child_frame_id, "map"); // not sure if the child frame id is the bundle's id???
