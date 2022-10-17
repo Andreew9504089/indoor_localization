@@ -12,31 +12,42 @@
 void bundleSelection(std::vector<geometry_msgs::TransformStamped> transforms_found, std::vector<geometry_msgs::TransformStamped>& transforms_selected);
 void bundleFusion(std::vector<geometry_msgs::TransformStamped> transforms_selected, geometry_msgs::Pose& uav_pose_world);
 void odomPublish(geometry_msgs::Pose uav_pose_world);
-void optiTrackCallback(const geometry_msgs::PoseStamped::ConstPtr& msg);
 void stallUAV(double time);
 void getMap2BundleTf(std::string source_frame, geometry_msgs::TransformStamped &source2target_transform);
 
-bool outlierCheck(geometry_msgs::Pose uav_pose_world);
+bool jumpCheck(geometry_msgs::Pose uav_pose_world);
 geometry_msgs::Pose poseTransform(geometry_msgs::Pose pose, std::string source_frame, std::string target_frame);
 geometry_msgs::Pose averagePose(std::vector<geometry_msgs::Pose> all_poses_wrt_map);
+std::vector<geometry_msgs::Pose> stdFilter(std::vector<geometry_msgs::Pose> all_poses_wrt_map);
 
-std::vector<std::string> bundle_names;// = {"tag_bundle_right_bottom", "tag_bundle_center_bottom", "tag_bundle_left_bottom",
-//                                        "tag_bundle_left_center", "tag_bundle_center_center", "tag_bundle_right_center", 
-//                                       "tag_bundle_right_top", "tag_bundle_center_top", "tag_bundle_left_top"};
-float opti_i, opti_j, opti_k, opti_w;
 geometry_msgs::Pose last_uav_pose_world;
-bool use_optiTrack = true; // use optiTrack's orientation
-double epsilon = 0.3; // distance jump threshold
-int max_bundle_num = 2; // maximum number of bundle to consider
+int max_bundle_num = -1; // maximum number of bundle to consider to enter standard deviation filter
+float opti_i, opti_j, opti_k, opti_w;
+bool use_optiTrack = false; // use optiTrack's orientation
+std::vector<std::string> bundle_names;
+double epsilon = 1; // distance jump threshold
 double stall_time = 0.5;
+double initial_x = 0;
+double initial_y = 0;
+double initial_z = 0.15;
+double desired_x = 0;
+double desired_y = 0;
+double desired_z = 1;
 
 ros::Publisher odom_pub;
 ros::Subscriber opti_sub;
 
+void optiTrackCallback(const geometry_msgs::PoseStamped::ConstPtr &msg){
+	opti_i = (*msg).pose.orientation.x;
+	opti_j = (*msg).pose.orientation.y;
+  opti_k = (*msg).pose.orientation.z;
+  opti_w = (*msg).pose.orientation.w;
+}
+
 int main(int argc, char **argv) {
   ros::init(argc, argv, "tf_to_odom");
   ros::NodeHandle nh;
-  ros::Rate rate(50);
+  ros::Rate rate(100);
 
   ros::V_string args;
 	ros::removeROSArgs(argc, argv, args);
@@ -48,9 +59,9 @@ int main(int argc, char **argv) {
   opti_sub = nh.subscribe("/vrpn_client_node/MAV1/pose", 1000, optiTrackCallback);
   bundle_names = args;
   
-  last_uav_pose_world.position.x = 0;
-  last_uav_pose_world.position.y = 0;
-  last_uav_pose_world.position.z = 0;
+  last_uav_pose_world.position.x = initial_x;
+  last_uav_pose_world.position.y = initial_y;
+  last_uav_pose_world.position.z = initial_z;
   last_uav_pose_world.orientation.x = 0;
   last_uav_pose_world.orientation.y = 0;
   last_uav_pose_world.orientation.z = 0;
@@ -64,14 +75,13 @@ int main(int argc, char **argv) {
     for(int i = 1; i < bundle_names.size(); i++){
       try {
         // camera pose under bundle frame
-        transforms_found.push_back(tfBuffer.lookupTransform("camera_color_optical_frame",bundle_names.at(i), ros::Time(0))); // maybe camera_link is optical frame? //camera pose in bundle frame
-        ROS_WARN("Find Transform %d", i);
+        transforms_found.push_back(tfBuffer.lookupTransform("camera_color_optical_frame", bundle_names.at(i) , ros::Time(0))); // maybe camera_link is optical frame? //camera pose in bundle frame
+        //ROS_WARN("Find Transform %d", i);
       } catch (tf2::TransformException &ex) {
-        ROS_WARN("%s", ex.what());
-        ROS_WARN("%d", i);
+        //ROS_WARN("%s", ex.what());
+        //ROS_WARN("%d", i);
       }
     }
-    ROS_ERROR("1");
     // Select the <max_bundle_number> closest bundle to the camera 
     bundleSelection(transforms_found, transforms_selected);
     // Transform the camera pose in tag frame to map frame and averaging all measurement
@@ -80,15 +90,17 @@ int main(int argc, char **argv) {
     // check if an uav pose in world frame exists or not
     if(transforms_selected.size()>0){
       // check if the computed pose is valid or not (steer jumping)
-      if(outlierCheck(uav_pose_world)){
+      if(jumpCheck(uav_pose_world)){
         odomPublish(uav_pose_world);
         last_uav_pose_world = uav_pose_world;
       }else{
         // stall the UAV to capture better detection
+        ROS_ERROR("BAD RESULT");
         stallUAV(stall_time);
       }
     }else{
       // stall the UAV to capture better detection
+      ROS_ERROR("NO RESULT");
       stallUAV(stall_time);
     }
 
@@ -105,7 +117,6 @@ void bundleSelection(std::vector<geometry_msgs::TransformStamped> transforms_fou
   
   // iterate through all detected bundles and sort them in the order of their distance with camera
   for(int i = 0; i < transforms_found.size(); i++){
-    ROS_ERROR("2");
     float tmp;
 
     transformStamped = transforms_found[i];
@@ -114,8 +125,8 @@ void bundleSelection(std::vector<geometry_msgs::TransformStamped> transforms_fou
     if(i == 0){
       dist.push_back(tmp);
       sorted_bundle.push_back(i);
-
     }else{
+      
       for(int j = 0; j < dist.size(); j++){
         if(tmp < dist[j]){
           dist.insert(dist.begin()+j,tmp);
@@ -130,13 +141,18 @@ void bundleSelection(std::vector<geometry_msgs::TransformStamped> transforms_fou
     }
   }
 
-  for(int k, cnt; (k < sorted_bundle.size()) || (cnt <= max_bundle_num); k++){
-    // check if the z is jumping to negative, if so, then ignore it and find the next smallest
-    if(transforms_found[sorted_bundle[k]].transform.translation.z >= 0){
-      transforms_selected.push_back(transforms_found[sorted_bundle[k]]);
-      cnt++;
+  //std::cout << "sort bundle size" << sorted_bundle.size() << std::endl;
+  if(max_bundle_num == -1) max_bundle_num = sorted_bundle.size();
+  if(sorted_bundle.size()>0){
+    for(int k, cnt; (k < sorted_bundle.size()) || (cnt < max_bundle_num); k++){
+      // check if the z is jumping to negative, if so, then ignore it and find the next smallest
+      if(transforms_found[sorted_bundle[k]].transform.translation.z >= 0){
+        transforms_selected.push_back(transforms_found[sorted_bundle[k]]);
+        cnt++;
+      }
     }
   }
+
 }
 
 // Averaging the Pose from previously selected bundles
@@ -146,6 +162,7 @@ void bundleFusion(std::vector<geometry_msgs::TransformStamped> transforms_select
   // 3. averaging all obtained position and orientation(quaternion can not be averaged)
   std::vector<geometry_msgs::Pose> all_poses_wrt_map;
 
+  std::cout << "selected size" << transforms_selected.size() << std::endl;
   if(transforms_selected.size()>0){
     for(int i=0; i < transforms_selected.size(); i++){
       geometry_msgs::Pose bundle_pose_wrt_camera, robot_pose_wrt_camera, robot_pose_wrt_bundle, robot_pose_wrt_map;
@@ -157,19 +174,28 @@ void bundleFusion(std::vector<geometry_msgs::TransformStamped> transforms_select
       bundle_pose_wrt_camera.orientation.y = transforms_selected[i].transform.rotation.y;
       bundle_pose_wrt_camera.orientation.z = transforms_selected[i].transform.rotation.z;
       bundle_pose_wrt_camera.orientation.w = transforms_selected[i].transform.rotation.w;
+      //std::cout << i << std::endl;
+      //std::cout << bundle_pose_wrt_camera << std::endl;
 
       // transform from camera_link to base_link
-      robot_pose_wrt_camera = poseTransform(bundle_pose_wrt_camera, "camera_link", "base_link");
+      robot_pose_wrt_camera = poseTransform(bundle_pose_wrt_camera, "camera_color_optical_frame", "base_link");
+      //std::cout << robot_pose_wrt_camera << std::endl;
 
       // transform from base link frame to bundle frame
       robot_pose_wrt_bundle = poseTransform(robot_pose_wrt_camera, "base_link", transforms_selected[i].child_frame_id);
+      //std::cout << robot_pose_wrt_bundle << std::endl;
 
       // transform the pose from bundle frame to map frame
       robot_pose_wrt_map = poseTransform(robot_pose_wrt_bundle, transforms_selected[i].child_frame_id, "map"); // not sure if the child frame id is the bundle's id???
+      //std::cout << "robot_pose_wrt_map" << "\n" << robot_pose_wrt_map << std::endl;
 
-      all_poses_wrt_map.push_back(robot_pose_wrt_map);
+      all_poses_wrt_map.push_back(bundle_pose_wrt_camera);
     }
+
+    all_poses_wrt_map = stdFilter(all_poses_wrt_map);
+
     uav_pose_world = averagePose(all_poses_wrt_map);
+    //std::cout << uav_pose_world << std::endl;
   }else{
     return;
   }
@@ -180,17 +206,19 @@ geometry_msgs::Pose poseTransform(geometry_msgs::Pose pose_wrt_source_frame, std
   tf2_ros::Buffer tfBuffer;
   tf2_ros::TransformListener tfListener(tfBuffer);
   geometry_msgs::TransformStamped source2target_transform;
-  ROS_WARN("enter pose transform");
+  bool flag = true;
+
+  //ROS_WARN("enter pose transform");
 
   if(target_frame != "map"){
-    while(true){
+    while(flag){
       try {
         source2target_transform = tfBuffer.lookupTransform(target_frame, source_frame, ros::Time(0));
-        break;
+        flag = false;
       } catch (tf2::TransformException &ex) {
-        ROS_WARN("Failed");
-        ROS_WARN("%s", ex.what());
-        ros::Duration(1.0).sleep();
+        //FROS_WARN("Failed");
+        //ROS_WARN("%s", ex.what());
+        flag = true;
       }
     }
   }else{
@@ -205,29 +233,39 @@ geometry_msgs::Pose poseTransform(geometry_msgs::Pose pose_wrt_source_frame, std
 geometry_msgs::Pose averagePose(std::vector<geometry_msgs::Pose> all_poses_wrt_map){
   float sum_x, sum_y, sum_z;
   geometry_msgs::Pose avg_pose;
+  if(all_poses_wrt_map.size() > 0){
+    for(int i = 0; i < all_poses_wrt_map.size(); i++){
+      sum_x += all_poses_wrt_map[i].position.x;
+      sum_y += all_poses_wrt_map[i].position.y;
+      sum_z += all_poses_wrt_map[i].position.z;
+    }
 
-  for(int i = 0; i < all_poses_wrt_map.size(); i++){
-    sum_x += all_poses_wrt_map[i].position.x;
-    sum_y += all_poses_wrt_map[i].position.y;
-    sum_z += all_poses_wrt_map[i].position.z;
-  }
+    avg_pose.position.x = sum_x / all_poses_wrt_map.size();
+    avg_pose.position.y = sum_y / all_poses_wrt_map.size();
+    avg_pose.position.z = sum_z / all_poses_wrt_map.size();
 
-  avg_pose.position.x = sum_x / all_poses_wrt_map.size();
-  avg_pose.position.y = sum_y / all_poses_wrt_map.size();
-  avg_pose.position.z = sum_z / all_poses_wrt_map.size();
-
-  if(use_optiTrack){
-    avg_pose.orientation.x = opti_i;
-    avg_pose.orientation.y = opti_j;
-    avg_pose.orientation.z = opti_k;
-    avg_pose.orientation.w = opti_w;
+    if(use_optiTrack){
+      avg_pose.orientation.x = opti_i;
+      avg_pose.orientation.y = opti_j;
+      avg_pose.orientation.z = opti_k;
+      avg_pose.orientation.w = opti_w;
+    }else{
+      // maybe slerp averaging can be applied, currently picking the closest detection's orientation
+      avg_pose.orientation.x = all_poses_wrt_map[0].orientation.x;
+      avg_pose.orientation.y = all_poses_wrt_map[0].orientation.y;
+      avg_pose.orientation.z = all_poses_wrt_map[0].orientation.z;
+      avg_pose.orientation.w = all_poses_wrt_map[0].orientation.w;
+    }
   }else{
-    // maybe slerp averaging can be applied, currently picking the closest detection's orientation
-    avg_pose.orientation.x = all_poses_wrt_map[0].orientation.x;
-    avg_pose.orientation.y = all_poses_wrt_map[0].orientation.y;
-    avg_pose.orientation.z = all_poses_wrt_map[0].orientation.z;
-    avg_pose.orientation.w = all_poses_wrt_map[0].orientation.w;
+    avg_pose.position.x = desired_x;
+    avg_pose.position.y = desired_y;
+    avg_pose.position.z = desired_z;
+    avg_pose.orientation.x = 0;
+    avg_pose.orientation.y = 0;
+    avg_pose.orientation.z = 0;
+    avg_pose.orientation.w = 1;  
   }
+
 }
 
 void odomPublish(geometry_msgs::Pose uav_pose_world){
@@ -240,17 +278,10 @@ void odomPublish(geometry_msgs::Pose uav_pose_world){
     odom.pose.pose.orientation.x = uav_pose_world.orientation.x;
     odom.pose.pose.orientation.y = uav_pose_world.orientation.y;
     odom.pose.pose.orientation.z = uav_pose_world.orientation.z;
-    odom.header.frame_id = "map";
+    odom.header.frame_id = "odom";
     odom.child_frame_id = "base_link";
 
     odom_pub.publish(odom);
-}
-
-void optiTrackCallback(const geometry_msgs::PoseStamped::ConstPtr &msg){
-	opti_i = (*msg).pose.orientation.x;
-	opti_j = (*msg).pose.orientation.y;
-  opti_k = (*msg).pose.orientation.z;
-  opti_w = (*msg).pose.orientation.w;
 }
 
 void stallUAV(double time){
@@ -262,7 +293,7 @@ void stallUAV(double time){
   
   uav_pose_world.position.x = 0;
   uav_pose_world.position.y = 0;
-  uav_pose_world.position.z = 0;
+  uav_pose_world.position.z = desired_z;
   uav_pose_world.orientation.x = 0;
   uav_pose_world.orientation.y = 0;
   uav_pose_world.orientation.z = 0;
@@ -277,11 +308,11 @@ void stallUAV(double time){
   }
 }
 
-bool outlierCheck(geometry_msgs::Pose uav_pose_world){
+bool jumpCheck(geometry_msgs::Pose uav_pose_world){
   float delta_x, delta_y;
 
   delta_x = abs(last_uav_pose_world.position.x - uav_pose_world.position.x);
-  delta_y = abs(last_uav_pose_world.position.x - uav_pose_world.position.x);
+  delta_y = abs(last_uav_pose_world.position.y - uav_pose_world.position.y);
   
   if(delta_x > epsilon || delta_y > epsilon){
     return false;
@@ -292,15 +323,56 @@ bool outlierCheck(geometry_msgs::Pose uav_pose_world){
 }
 
 void getMap2BundleTf(std::string source_frame, geometry_msgs::TransformStamped &source2target_transform){
-  ros::param::get("tf_to_odom/map"+source_frame+"/translation/x", source2target_transform.transform.translation.x);
-  ros::param::get("tf_to_odom/map"+source_frame+"/translation/y", source2target_transform.transform.translation.y);
-  ros::param::get("tf_to_odom/map"+source_frame+"/translation/z", source2target_transform.transform.translation.z);
-  ros::param::get("tf_to_odom/map"+source_frame+"/orientation/x", source2target_transform.transform.rotation.x);
-  ros::param::get("tf_to_odom/map"+source_frame+"/orientation/y", source2target_transform.transform.rotation.y);
-  ros::param::get("tf_to_odom/map"+source_frame+"/orientation/z", source2target_transform.transform.rotation.z);
-  ros::param::get("tf_to_odom/map"+source_frame+"/orientation/w", source2target_transform.transform.rotation.w);
-}
-/*void predictPose(){
+  std::vector<float> pose;
+  ros::param::get("map2tag/"+source_frame, pose);
+  source2target_transform.transform.translation.x = pose[0];
+  source2target_transform.transform.translation.y = pose[1];
+  source2target_transform.transform.translation.z = pose[2];
+  source2target_transform.transform.rotation.x = pose[3];
+  source2target_transform.transform.rotation.y = pose[4];
+  source2target_transform.transform.rotation.z = pose[5];
+  source2target_transform.transform.rotation.w = pose[6];
 
-}*/
+  //std::cout << pose[0] << std::endl;
+}
+
+// Eliminate the outlier whose is one standard deviation away from the mean of all considered measurements
+std::vector<geometry_msgs::Pose> stdFilter(std::vector<geometry_msgs::Pose> all_poses_wrt_map){
+  float sum_x, sum_y, sum_z, avg_x, avg_y, avg_z, std_x, std_y, std_z;
+  std::vector<geometry_msgs::Pose> all_poses_wrt_map_filtered;
+
+  for(int i = 0; i < all_poses_wrt_map.size(); i++){
+    sum_x += all_poses_wrt_map[i].position.x;
+    sum_y += all_poses_wrt_map[i].position.y;
+    sum_z += all_poses_wrt_map[i].position.z;
+  }
+
+  avg_x = sum_x / all_poses_wrt_map.size();
+  avg_y = sum_y / all_poses_wrt_map.size();
+  avg_z = sum_z / all_poses_wrt_map.size();
+
+  for(int i = 0; i < all_poses_wrt_map.size(); i++){
+    sum_x += pow(all_poses_wrt_map[i].position.x - avg_x, 2);
+    sum_y += pow(all_poses_wrt_map[i].position.y - avg_y, 2);
+    sum_z += pow(all_poses_wrt_map[i].position.z - avg_z, 2);
+  }
+
+  std_x = sqrt(sum_x);
+  std_y = sqrt(sum_y);
+  std_z = sqrt(sum_z);
+
+  for(int i = 0; i < all_poses_wrt_map.size(); i++){
+    bool cond_x, cond_y, cond_z;
+
+    cond_x = abs(all_poses_wrt_map[i].position.x - avg_x) > std_x;
+    cond_y = abs(all_poses_wrt_map[i].position.y - avg_y) > std_y;
+    cond_z = abs(all_poses_wrt_map[i].position.z - avg_z) > std_z;
+
+    if(!cond_x && !cond_y && !cond_z){
+      all_poses_wrt_map_filtered.push_back(all_poses_wrt_map[i]);
+    }
+  }
+
+  return all_poses_wrt_map_filtered;
+}
 
