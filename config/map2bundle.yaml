@@ -1,0 +1,45 @@
+map:
+  - tag412:
+     pose:
+       position:
+         x: -0.05
+         y: +0.065
+         z: 0
+       rotation:
+         x: 0
+         y: 0
+         z: 0
+         w: 1
+  - tag413:
+     pose:
+       position:
+         x: 0.05
+         y: +0.065
+         z: 0
+       rotation:
+         x: 0
+         y: 0
+         z: 0
+         w: 1
+  - tag414:
+     pose:
+       position:
+         x: -0.05
+         y: -0.065
+         z: 0
+       rotation:
+         x: 0
+         y: 0
+         z: 0
+         w: 1
+  - tag414:
+     pose:
+       position:
+         x: +0.05
+         y: -0.065
+         z: 0
+       rotation:
+         x: 0
+         y: 0
+         z: 0
+         w: 1
