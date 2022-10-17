@@ -18,9 +18,9 @@ bool outlierCheck(geometry_msgs::Pose uav_pose_world);
 geometry_msgs::Pose poseTransform(geometry_msgs::Pose pose, std::string source_frame, std::string target_frame);
 geometry_msgs::Pose averagePose(std::vector<geometry_msgs::Pose> all_poses_wrt_map);
 
-std::vector<std::string> bundle_names = {"tag_bundle_right_bottom", "tag_bundle_center_bottom", "tag_bundle_left_bottom",
-                                        "tag_bundle_left_center", "tag_bundle_center_center", "tag_bundle_right_center", 
-                                        "tag_bundle_right_top", "tag_bundle_center_top", "tag_bundle_left_top"};
+std::vector<std::string> bundle_names;// = {"tag_bundle_right_bottom", "tag_bundle_center_bottom", "tag_bundle_left_bottom",
+//                                        "tag_bundle_left_center", "tag_bundle_center_center", "tag_bundle_right_center", 
+//                                       "tag_bundle_right_top", "tag_bundle_center_top", "tag_bundle_left_top"};
 float opti_i, opti_j, opti_k, opti_w;
 geometry_msgs::Pose last_uav_pose_world;
 bool use_optiTrack = true; // use optiTrack's orientation
@@ -36,12 +36,16 @@ ros::Rate rate(100);
 int main(int argc, char **argv) {
   ros::init(argc, argv, "tf_to_odom");
 
+  ros::V_string args;
+	ros::removeROSArgs(argc, argv, args);
+
   tf2_ros::Buffer tfBuffer;
   tf2_ros::TransformListener tfListener(tfBuffer);
 
   odom_pub = nh.advertise<nav_msgs::Odometry>("/camera/pose_d", 100);
   opti_sub = nh.subscribe("/vrpn_client_node/MAV1/pose", 1000, optiTrackCallback);
-
+  bundle_names = args;
+  
   last_uav_pose_world.position.x = 0;
   last_uav_pose_world.position.y = 0;
   last_uav_pose_world.position.z = 0;
@@ -152,10 +156,10 @@ void bundleFusion(std::vector<geometry_msgs::TransformStamped> transforms_select
       bundle_pose_wrt_camera.orientation.w = transforms_selected[i].transform.rotation.w;
 
       // transform from camera_link to base_link
-      robot_pose_wrt_camera = poseTransform(camera_pose_wrt_bundle, "camera_link", "base_link");
+      robot_pose_wrt_camera = poseTransform(bundle_pose_wrt_camera, "camera_link", "base_link");
 
       // transform from base link frame to bundle frame
-      robot_pose_wrt_bundle = poseTransform(camera_pose_wrt_bundle, "base_link", transforms_selected[i].child_frame_id);
+      robot_pose_wrt_bundle = poseTransform(robot_pose_wrt_camera, "base_link", transforms_selected[i].child_frame_id);
 
       // transform the pose from bundle frame to map frame
       robot_pose_wrt_map = poseTransform(robot_pose_wrt_bundle, transforms_selected[i].child_frame_id, "map"); // not sure if the child frame id is the bundle's id???
