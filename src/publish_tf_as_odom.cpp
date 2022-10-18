@@ -202,7 +202,7 @@ void bundleFusion(std::vector<geometry_msgs::TransformStamped> transforms_select
       //std::cout << "robot_pose_wrt_bundle" << robot_pose_wrt_bundle << std::endl;
 
       // transform the pose from bundle frame to map frame
-      robot_pose_wrt_map = poseTransform(robot_pose_wrt_bundle, transforms_selected[i].child_frame_id, "map"); // not sure if the child frame id is the bundle's id???
+      robot_pose_wrt_map = poseTransform(bundle_pose_wrt_camera, transforms_selected[i].child_frame_id, "map"); // not sure if the child frame id is the bundle's id???
       std::cout << "robot_pose_wrt_map" << "\n" << robot_pose_wrt_map << std::endl;
 
       all_poses_wrt_map.push_back(robot_pose_wrt_map);
@@ -225,7 +225,7 @@ geometry_msgs::Pose poseTransform(geometry_msgs::Pose pose_wrt_source_frame, std
   bool flag = true;
 
   //ROS_WARN("enter pose transform");
-  int cnt_timeout;
+  //int cnt_timeout;
   if(target_frame != "map"){
     while(flag){
       //cnt_timeout++;
@@ -242,6 +242,7 @@ geometry_msgs::Pose poseTransform(geometry_msgs::Pose pose_wrt_source_frame, std
     getMap2BundleTf(source_frame, source2target_transform);
   }
 
+  tf2::doTransform(pose_wrt_source_frame, pose_wrt_target_frame, source2target_transform);
   return pose_wrt_target_frame;
 }
 
@@ -380,7 +381,7 @@ std::vector<geometry_msgs::Pose> stdFilter(std::vector<geometry_msgs::Pose> all_
     }
   }
 
-  std::cout << all_poses_wrt_map_filtered[0] << std::endl;
+  //std::cout << all_poses_wrt_map_filtered[0] << std::endl;
   return all_poses_wrt_map_filtered;
 }
 
