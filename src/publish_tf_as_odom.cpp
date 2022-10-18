@@ -56,17 +56,14 @@ void odomCallback(const nav_msgs::Odometry::ConstPtr &msg){
 int main(int argc, char **argv) {
   ros::init(argc, argv, "tf_to_odom");
   ros::NodeHandle nh;
-  ros::Rate rate(100);
+  ros::Rate rate(400);
 
   ros::V_string args;
 	ros::removeROSArgs(argc, argv, args);
 
-  tf2_ros::Buffer tfBuffer;
-  tf2_ros::TransformListener tfListener(tfBuffer);
-
   odom_pub = nh.advertise<nav_msgs::Odometry>("/camera/pose_d", 100);
   opti_sub = nh.subscribe("/vrpn_client_node/MAV1/pose", 1000, optiTrackCallback);
-  odom_sub = nh.subscribe("/odometry_filtered", 1000, odomCallback);
+  odom_sub = nh.subscribe("/odometry_filtered", 400, odomCallback);
   bundle_names = args;
   
   last_uav_pose_world.position.x = initial_x;
@@ -78,32 +75,40 @@ int main(int argc, char **argv) {
   last_uav_pose_world.orientation.w = 1.0;
 
   while (nh.ok()) {
+    tf2_ros::Buffer tfBuffer;
+    tf2_ros::TransformListener tfListener(tfBuffer);
     std::vector<geometry_msgs::TransformStamped> transforms_found, transforms_selected;
     geometry_msgs::Pose uav_pose_world;
+    int flag = 0;
 
+    transforms_selected.clear();
+    transforms_found.clear();
     // Read all Tf broadcasted by apriltag_ros
     for(int i = 1; i < bundle_names.size(); i++){
       try {
         // camera pose under bundle frame
-        transforms_found.push_back(tfBuffer.lookupTransform("camera_color_optical_frame", bundle_names.at(i) , ros::Time(0))); // maybe camera_link is optical frame? //camera pose in bundle frame
+        transforms_found.push_back(tfBuffer.lookupTransform(bundle_names.at(i), "camera_color_optical_frame", ros::Time(0))); // maybe camera_link is optical frame? //camera pose in bundle frame
         //ROS_WARN("Find Transform %d", i);
+        flag++;
       } catch (tf2::TransformException &ex) {
         //ROS_WARN("%s", ex.what());
         //ROS_WARN("%d", i);
+        flag--;
       }
     }
+
     // Select the <max_bundle_number> closest bundle to the camera 
     bundleSelection(transforms_found, transforms_selected);
     // Transform the camera pose in tag frame to map frame and averaging all measurement
     bundleFusion(transforms_selected, uav_pose_world);
-
     // check if an uav pose in world frame exists or not
-    if(transforms_selected.size()>0){
+
+    if(flag > 0){
       // check if the computed pose is valid or not (steer jumping)
       if(jumpCheck(uav_pose_world)){
         ROS_WARN("PUBLISH RESULT");
         odomPublish(uav_pose_world);
-        std::cout << uav_pose_world << std::endl;
+
         restart = false;
       }else{
         // stall the UAV to capture better detection
@@ -128,6 +133,7 @@ void bundleSelection(std::vector<geometry_msgs::TransformStamped> transforms_fou
   std::vector<int> sorted_bundle; // sort the bundles according to their distance
   geometry_msgs::TransformStamped transformStamped;
   
+  ROS_WARN("select");
   // iterate through all detected bundles and sort them in the order of their distance with camera
   for(int i = 0; i < transforms_found.size(); i++){
     float tmp;
@@ -169,13 +175,15 @@ void bundleSelection(std::vector<geometry_msgs::TransformStamped> transforms_fou
 }
 
 // Averaging the Pose from previously selected bundles
-void bundleFusion(std::vector<geometry_msgs::TransformStamped> transforms_selected, geometry_msgs::Pose& uav_pose_world){
+void bundleFusion(std::vector<geometry_msgs::TransformStamped> transforms_selected, geometry_msgs::Pose &uav_pose_world){
   // 1. find the inverse of transforms_selected to obtain camera pose w.r.t bundle frame (seems duplicated so didn't implemented)
   // 2. use the map to bundle static tf to obtain camera pose w.r.t map frame
   // 3. averaging all obtained position and orientation(quaternion can not be averaged)
   std::vector<geometry_msgs::Pose> all_poses_wrt_map;
 
   //std::cout << "selected size" << transforms_selected.size() << std::endl;
+  ROS_WARN("fusing");
+
   if(transforms_selected.size()>0){
     for(int i=0; i < transforms_selected.size(); i++){
       geometry_msgs::Pose bundle_pose_wrt_camera, robot_pose_wrt_camera, robot_pose_wrt_bundle, robot_pose_wrt_map;
@@ -195,21 +203,24 @@ void bundleFusion(std::vector<geometry_msgs::TransformStamped> transforms_select
       //std::cout << "bundle_pose_wrt_robot" << robot_pose_wrt_camera << std::endl;
 
       // transform from base link frame to bundle frame
-      robot_pose_wrt_bundle = poseTransform(robot_pose_wrt_camera, "camera_color_optical_frame", transforms_selected[i].child_frame_id);
+      //robot_pose_wrt_bundle = poseTransform(robot_pose_wrt_camera, "camera_color_optical_frame", transforms_selected[i].child_frame_id);
       //std::cout << "robot_pose_wrt_bundle" << robot_pose_wrt_bundle << std::endl;
 
       // transform the pose from bundle frame to map frame
-      robot_pose_wrt_map = poseTransform(robot_pose_wrt_bundle, transforms_selected[i].child_frame_id, "map"); // not sure if the child frame id is the bundle's id???
-      std::cout << "robot_pose_wrt_map" << "\n" << robot_pose_wrt_map << std::endl;
+      robot_pose_wrt_map = poseTransform(bundle_pose_wrt_camera, transforms_selected[i].header.frame_id, "map"); // not sure if the child frame id is the bundle's id???
+      //std::cout << "robot_pose_wrt_map" << "\n" << robot_pose_wrt_map << std::endl;
 
-      all_poses_wrt_map.push_back(bundle_pose_wrt_camera);
+      all_poses_wrt_map.push_back(robot_pose_wrt_map);
     }
+    //std::cout << all_poses_wrt_map[0] << std::endl;
 
-    all_poses_wrt_map = stdFilter(all_poses_wrt_map);
+  all_poses_wrt_map = stdFilter(all_poses_wrt_map);
+  //std::cout << all_poses_wrt_map[0] << std::endl;
 
-    uav_pose_world = averagePose(all_poses_wrt_map);
-    //std::cout << uav_pose_world << std::endl;
+  uav_pose_world = averagePose(all_poses_wrt_map);
+
   }else{
+    transforms_selected.clear();
     return;
   }
 }
@@ -219,34 +230,16 @@ geometry_msgs::Pose poseTransform(geometry_msgs::Pose pose_wrt_source_frame, std
   tf2_ros::Buffer tfBuffer;
   tf2_ros::TransformListener tfListener(tfBuffer);
   geometry_msgs::TransformStamped source2target_transform;
-  bool flag = true;
 
-  //ROS_WARN("enter pose transform");
-  int cnt_timeout;
-  if(target_frame != "map"){
-    while(flag){
-      //cnt_timeout++;
-      try {
-        source2target_transform = tfBuffer.lookupTransform(target_frame, source_frame, ros::Time(0));
-        flag = false;
-      } catch (tf2::TransformException &ex) {
-        //FROS_WARN("Failed");
-        //ROS_WARN("%s", ex.what());
-        flag = true;
-      }
-    }
-  }else{
-    getMap2BundleTf(source_frame, source2target_transform);
-  }
-
+  getMap2BundleTf(source_frame, source2target_transform);
   tf2::doTransform(pose_wrt_source_frame, pose_wrt_target_frame, source2target_transform);
-
   return pose_wrt_target_frame;
 }
 
 geometry_msgs::Pose averagePose(std::vector<geometry_msgs::Pose> all_poses_wrt_map){
-  float sum_x, sum_y, sum_z;
+  float sum_x{0}, sum_y{0}, sum_z{0};
   geometry_msgs::Pose avg_pose;
+
   if(all_poses_wrt_map.size() > 0){
     for(int i = 0; i < all_poses_wrt_map.size(); i++){
       sum_x += all_poses_wrt_map[i].position.x;
@@ -270,7 +263,9 @@ geometry_msgs::Pose averagePose(std::vector<geometry_msgs::Pose> all_poses_wrt_m
       avg_pose.orientation.z = all_poses_wrt_map[0].orientation.z;
       avg_pose.orientation.w = all_poses_wrt_map[0].orientation.w;
     }
+    //std::cout << "avg size" << sum_x << all_poses_wrt_map.size() << "avg_pose\n" << avg_pose << std::endl;
   }
+  return avg_pose;
 }
 
 void odomPublish(geometry_msgs::Pose uav_pose_world){
@@ -287,6 +282,7 @@ void odomPublish(geometry_msgs::Pose uav_pose_world){
     odom.child_frame_id = "base_link";
 
     odom_pub.publish(odom);
+    //std::cout << uav_pose_world << std::endl;
 }
 
 void stallUAV(double time){
@@ -377,8 +373,6 @@ std::vector<geometry_msgs::Pose> stdFilter(std::vector<geometry_msgs::Pose> all_
       all_poses_wrt_map_filtered.push_back(all_poses_wrt_map[i]);
     }
   }
-
-  std::cout << all_poses_wrt_map_filtered[0] << std::endl;
   return all_poses_wrt_map_filtered;
 }
 
