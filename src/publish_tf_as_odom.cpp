@@ -101,7 +101,10 @@ int main(int argc, char **argv) {
     if(transforms_selected.size()>0){
       // check if the computed pose is valid or not (steer jumping)
       if(jumpCheck(uav_pose_world)){
+        ROS_WARN("PUBLISH RESULT");
         odomPublish(uav_pose_world);
+        std::cout << uav_pose_world << std::endl;
+
         restart = false;
       }else{
         // stall the UAV to capture better detection
@@ -173,7 +176,8 @@ void bundleFusion(std::vector<geometry_msgs::TransformStamped> transforms_select
   // 3. averaging all obtained position and orientation(quaternion can not be averaged)
   std::vector<geometry_msgs::Pose> all_poses_wrt_map;
 
-  std::cout << "selected size" << transforms_selected.size() << std::endl;
+  //std::cout << "selected size" << transforms_selected.size() << std::endl;
+
   if(transforms_selected.size()>0){
     for(int i=0; i < transforms_selected.size(); i++){
       geometry_msgs::Pose bundle_pose_wrt_camera, robot_pose_wrt_camera, robot_pose_wrt_bundle, robot_pose_wrt_map;
@@ -186,19 +190,19 @@ void bundleFusion(std::vector<geometry_msgs::TransformStamped> transforms_select
       bundle_pose_wrt_camera.orientation.z = transforms_selected[i].transform.rotation.z;
       bundle_pose_wrt_camera.orientation.w = transforms_selected[i].transform.rotation.w;
       //std::cout << i << std::endl;
-      //std::cout << bundle_pose_wrt_camera << std::endl;
+      //std::cout << "bundle_pose_wrt_camera" << bundle_pose_wrt_camera << std::endl;
 
       // transform from camera_link to base_link
-      robot_pose_wrt_camera = poseTransform(bundle_pose_wrt_camera, "camera_color_optical_frame", "base_link");
-      //std::cout << robot_pose_wrt_camera << std::endl;
+      //robot_pose_wrt_camera = poseTransform(bundle_pose_wrt_camera, "camera_color_optical_frame", "base_link");
+      //std::cout << "bundle_pose_wrt_robot" << robot_pose_wrt_camera << std::endl;
 
       // transform from base link frame to bundle frame
-      robot_pose_wrt_bundle = poseTransform(robot_pose_wrt_camera, "base_link", transforms_selected[i].child_frame_id);
-      //std::cout << robot_pose_wrt_bundle << std::endl;
+      robot_pose_wrt_bundle = poseTransform(robot_pose_wrt_camera, "camera_color_optical_frame", transforms_selected[i].child_frame_id);
+      //std::cout << "robot_pose_wrt_bundle" << robot_pose_wrt_bundle << std::endl;
 
       // transform the pose from bundle frame to map frame
       robot_pose_wrt_map = poseTransform(robot_pose_wrt_bundle, transforms_selected[i].child_frame_id, "map"); // not sure if the child frame id is the bundle's id???
-      //std::cout << "robot_pose_wrt_map" << "\n" << robot_pose_wrt_map << std::endl;
+      std::cout << "robot_pose_wrt_map" << "\n" << robot_pose_wrt_map << std::endl;
 
       all_poses_wrt_map.push_back(bundle_pose_wrt_camera);
     }
@@ -220,9 +224,10 @@ geometry_msgs::Pose poseTransform(geometry_msgs::Pose pose_wrt_source_frame, std
   bool flag = true;
 
   //ROS_WARN("enter pose transform");
-
+  int cnt_timeout;
   if(target_frame != "map"){
     while(flag){
+      //cnt_timeout++;
       try {
         source2target_transform = tfBuffer.lookupTransform(target_frame, source_frame, ros::Time(0));
         flag = false;
@@ -267,14 +272,6 @@ geometry_msgs::Pose averagePose(std::vector<geometry_msgs::Pose> all_poses_wrt_m
       avg_pose.orientation.z = all_poses_wrt_map[0].orientation.z;
       avg_pose.orientation.w = all_poses_wrt_map[0].orientation.w;
     }
-  }else{
-    avg_pose.position.x = desired_x;
-    avg_pose.position.y = desired_y;
-    avg_pose.position.z = desired_z;
-    avg_pose.orientation.x = 0;
-    avg_pose.orientation.y = 0;
-    avg_pose.orientation.z = 0;
-    avg_pose.orientation.w = 1;  
   }
 
 }
@@ -384,6 +381,7 @@ std::vector<geometry_msgs::Pose> stdFilter(std::vector<geometry_msgs::Pose> all_
     }
   }
 
+  std::cout << all_poses_wrt_map_filtered[0] << std::endl;
   return all_poses_wrt_map_filtered;
 }
 
