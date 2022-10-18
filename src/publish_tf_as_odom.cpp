@@ -85,13 +85,14 @@ int main(int argc, char **argv) {
     for(int i = 1; i < bundle_names.size(); i++){
       try {
         // camera pose under bundle frame
-        transforms_found.push_back(tfBuffer.lookupTransform("camera_color_optical_frame", bundle_names.at(i) , ros::Time(0))); // maybe camera_link is optical frame? //camera pose in bundle frame
+        transforms_found.push_back(tfBuffer.lookupTransform(bundle_names.at(i), "camera_color_optical_frame", ros::Time(0))); // maybe camera_link is optical frame? //camera pose in bundle frame
         //ROS_WARN("Find Transform %d", i);
       } catch (tf2::TransformException &ex) {
         //ROS_WARN("%s", ex.what());
         //ROS_WARN("%d", i);
       }
     }
+
     // Select the <max_bundle_number> closest bundle to the camera 
     bundleSelection(transforms_found, transforms_selected);
     // Transform the camera pose in tag frame to map frame and averaging all measurement
@@ -197,14 +198,14 @@ void bundleFusion(std::vector<geometry_msgs::TransformStamped> transforms_select
       //std::cout << "bundle_pose_wrt_robot" << robot_pose_wrt_camera << std::endl;
 
       // transform from base link frame to bundle frame
-      robot_pose_wrt_bundle = poseTransform(robot_pose_wrt_camera, "camera_color_optical_frame", transforms_selected[i].child_frame_id);
+      //robot_pose_wrt_bundle = poseTransform(robot_pose_wrt_camera, "camera_color_optical_frame", transforms_selected[i].child_frame_id);
       //std::cout << "robot_pose_wrt_bundle" << robot_pose_wrt_bundle << std::endl;
 
       // transform the pose from bundle frame to map frame
       robot_pose_wrt_map = poseTransform(robot_pose_wrt_bundle, transforms_selected[i].child_frame_id, "map"); // not sure if the child frame id is the bundle's id???
       std::cout << "robot_pose_wrt_map" << "\n" << robot_pose_wrt_map << std::endl;
 
-      all_poses_wrt_map.push_back(bundle_pose_wrt_camera);
+      all_poses_wrt_map.push_back(robot_pose_wrt_map);
     }
 
     all_poses_wrt_map = stdFilter(all_poses_wrt_map);
@@ -237,11 +238,9 @@ geometry_msgs::Pose poseTransform(geometry_msgs::Pose pose_wrt_source_frame, std
         flag = true;
       }
     }
-  }else{
+}else{
     getMap2BundleTf(source_frame, source2target_transform);
   }
-
-  tf2::doTransform(pose_wrt_source_frame, pose_wrt_target_frame, source2target_transform);
 
   return pose_wrt_target_frame;
 }
