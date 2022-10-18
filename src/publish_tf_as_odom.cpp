@@ -25,7 +25,7 @@ int max_bundle_num = -1; // maximum number of bundle to consider to enter standa
 float opti_i, opti_j, opti_k, opti_w;
 bool use_optiTrack = false; // use optiTrack's orientation
 bool restart = false;
-
+bool flag = true;
 std::vector<std::string> bundle_names;
 
 double epsilon = 1; // distance jump threshold
@@ -38,13 +38,17 @@ double desired_y = 0;
 double desired_z = 1;
 
 ros::Publisher odom_pub;
-ros::Subscriber opti_sub, odom_sub;
+ros::Subscriber opti_sub, odom_sub, april_sub;
 
 void optiTrackCallback(const geometry_msgs::PoseStamped::ConstPtr &msg){
-	opti_i = (*msg).pose.orientation.x;
-	opti_j = (*msg).pose.orientation.y;
+  opti_i = (*msg).pose.orientation.x;
+  opti_j = (*msg).pose.orientation.y;
   opti_k = (*msg).pose.orientation.z;
   opti_w = (*msg).pose.orientation.w;
+}
+
+void apriltagCallback(){
+  flag = true;
 }
 
 void odomCallback(const nav_msgs::Odometry::ConstPtr &msg){
@@ -57,13 +61,16 @@ int main(int argc, char **argv) {
   ros::init(argc, argv, "tf_to_odom");
   ros::NodeHandle nh;
   ros::Rate rate(400);
+  tf2_ros::Buffer tfBuffer;
+  tf2_ros::TransformListener tfListener(tfBuffer);	
 
   ros::V_string args;
-	ros::removeROSArgs(argc, argv, args);
+  ros::removeROSArgs(argc, argv, args);
 
   odom_pub = nh.advertise<nav_msgs::Odometry>("/camera/pose_d", 100);
   opti_sub = nh.subscribe("/vrpn_client_node/MAV1/pose", 1000, optiTrackCallback);
   odom_sub = nh.subscribe("/odometry_filtered", 400, odomCallback);
+  april_sub = nh.subscribe("/downward/tag_detections", 400, apriltagCallback);
   bundle_names = args;
   
   last_uav_pose_world.position.x = initial_x;
@@ -75,11 +82,8 @@ int main(int argc, char **argv) {
   last_uav_pose_world.orientation.w = 1.0;
 
   while (nh.ok()) {
-    tf2_ros::Buffer tfBuffer;
-    tf2_ros::TransformListener tfListener(tfBuffer);
     std::vector<geometry_msgs::TransformStamped> transforms_found, transforms_selected;
     geometry_msgs::Pose uav_pose_world;
-    int flag = 0;
 
     transforms_selected.clear();
     transforms_found.clear();
@@ -89,11 +93,9 @@ int main(int argc, char **argv) {
         // camera pose under bundle frame
         transforms_found.push_back(tfBuffer.lookupTransform(bundle_names.at(i), "camera_color_optical_frame", ros::Time(0))); // maybe camera_link is optical frame? //camera pose in bundle frame
         //ROS_WARN("Find Transform %d", i);
-        flag++;
       } catch (tf2::TransformException &ex) {
         //ROS_WARN("%s", ex.what());
         //ROS_WARN("%d", i);
-        flag--;
       }
     }
 
@@ -103,13 +105,11 @@ int main(int argc, char **argv) {
     bundleFusion(transforms_selected, uav_pose_world);
     // check if an uav pose in world frame exists or not
 
-    if(flag > 0){
+    if(flag){
       // check if the computed pose is valid or not (steer jumping)
       if(jumpCheck(uav_pose_world)){
         ROS_WARN("PUBLISH RESULT");
         odomPublish(uav_pose_world);
-
-
         restart = false;
       }else{
         // stall the UAV to capture better detection
@@ -122,9 +122,10 @@ int main(int argc, char **argv) {
       ROS_ERROR("NO RESULT");
       continue;
     }
-
+    flag = false;
     ros::spinOnce();
     rate.sleep();
+    std::cout << flag << std::endl;
   }
 }
 
@@ -134,7 +135,6 @@ void bundleSelection(std::vector<geometry_msgs::TransformStamped> transforms_fou
   std::vector<int> sorted_bundle; // sort the bundles according to their distance
   geometry_msgs::TransformStamped transformStamped;
   
-  ROS_WARN("select");
   // iterate through all detected bundles and sort them in the order of their distance with camera
   for(int i = 0; i < transforms_found.size(); i++){
     float tmp;
