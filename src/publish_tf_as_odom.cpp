@@ -104,6 +104,7 @@ int main(int argc, char **argv) {
         ROS_WARN("PUBLISH RESULT");
         odomPublish(uav_pose_world);
         std::cout << uav_pose_world << std::endl;
+
         restart = false;
       }else{
         // stall the UAV to capture better detection
@@ -176,6 +177,7 @@ void bundleFusion(std::vector<geometry_msgs::TransformStamped> transforms_select
   std::vector<geometry_msgs::Pose> all_poses_wrt_map;
 
   //std::cout << "selected size" << transforms_selected.size() << std::endl;
+
   if(transforms_selected.size()>0){
     for(int i=0; i < transforms_selected.size(); i++){
       geometry_msgs::Pose bundle_pose_wrt_camera, robot_pose_wrt_camera, robot_pose_wrt_bundle, robot_pose_wrt_map;
@@ -271,6 +273,7 @@ geometry_msgs::Pose averagePose(std::vector<geometry_msgs::Pose> all_poses_wrt_m
       avg_pose.orientation.w = all_poses_wrt_map[0].orientation.w;
     }
   }
+
 }
 
 void odomPublish(geometry_msgs::Pose uav_pose_world){
