@@ -24,7 +24,10 @@ geometry_msgs::Pose last_uav_pose_world;
 int max_bundle_num = -1; // maximum number of bundle to consider to enter standard deviation filter
 float opti_i, opti_j, opti_k, opti_w;
 bool use_optiTrack = false; // use optiTrack's orientation
+bool restart = false;
+
 std::vector<std::string> bundle_names;
+
 double epsilon = 1; // distance jump threshold
 double stall_time = 0.5;
 double initial_x = 0;
@@ -35,13 +38,19 @@ double desired_y = 0;
 double desired_z = 1;
 
 ros::Publisher odom_pub;
-ros::Subscriber opti_sub;
+ros::Subscriber opti_sub, odom_sub;
 
 void optiTrackCallback(const geometry_msgs::PoseStamped::ConstPtr &msg){
 	opti_i = (*msg).pose.orientation.x;
 	opti_j = (*msg).pose.orientation.y;
   opti_k = (*msg).pose.orientation.z;
   opti_w = (*msg).pose.orientation.w;
+}
+
+void odomCallback(const nav_msgs::Odometry::ConstPtr &msg){
+  last_uav_pose_world.position.x = (*msg).pose.pose.orientation.x;
+  last_uav_pose_world.position.y = (*msg).pose.pose.orientation.y;
+  last_uav_pose_world.position.z = (*msg).pose.pose.orientation.z;
 }
 
 int main(int argc, char **argv) {
@@ -57,6 +66,7 @@ int main(int argc, char **argv) {
 
   odom_pub = nh.advertise<nav_msgs::Odometry>("/camera/pose_d", 100);
   opti_sub = nh.subscribe("/vrpn_client_node/MAV1/pose", 1000, optiTrackCallback);
+  odom_sub = nh.subscribe("/odometry_filtered", 1000, odomCallback);
   bundle_names = args;
   
   last_uav_pose_world.position.x = initial_x;
@@ -92,16 +102,17 @@ int main(int argc, char **argv) {
       // check if the computed pose is valid or not (steer jumping)
       if(jumpCheck(uav_pose_world)){
         odomPublish(uav_pose_world);
-        last_uav_pose_world = uav_pose_world;
+        restart = false;
       }else{
         // stall the UAV to capture better detection
         ROS_ERROR("BAD RESULT");
         stallUAV(stall_time);
+        restart = true;
       }
     }else{
       // stall the UAV to capture better detection
       ROS_ERROR("NO RESULT");
-      stallUAV(stall_time);
+      continue;
     }
 
     ros::spinOnce();
@@ -314,7 +325,7 @@ bool jumpCheck(geometry_msgs::Pose uav_pose_world){
   delta_x = abs(last_uav_pose_world.position.x - uav_pose_world.position.x);
   delta_y = abs(last_uav_pose_world.position.y - uav_pose_world.position.y);
   
-  if(delta_x > epsilon || delta_y > epsilon){
+  if((delta_x > epsilon || delta_y > epsilon) && !restart){
     return false;
   }else{
     return true;
